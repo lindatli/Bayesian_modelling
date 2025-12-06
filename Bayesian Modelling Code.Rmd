@@ -1,0 +1,378 @@
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(ISLR)
+library(glmnet)
+library(ggcorrplot)
+library(magrittr)
+library(dplyr)
+library(rstan)
+library(ggplot2)
+library(gridExtra)
+```
+
+interested in G3 variable, the final grade
+
+```{r}
+# Data importing, cleaning
+# Import the table
+d2=read.table("student-por.csv",sep=";",header=TRUE, stringsAsFactors = TRUE)
+
+print(c(nrow(d2), ncol(d2))) # 649 students, 33 columns
+
+# Define the column names to convert to factors
+columns_to_convert <- c("Medu", "Fedu", "traveltime", "studytime", "failures", "famrel", "freetime", "goout", "Dalc", "Walc", "health")
+
+# Apply factor() to each specified column
+d2[columns_to_convert] <- lapply(d2[columns_to_convert], factor)
+
+summary(d2)
+```
+
+```{r}
+# Splitting data into training (90%) and testing sets (10%)
+set.seed(123) # Set seed for reproducibility
+
+# Training
+train.size <-  floor(nrow(d2) * 0.9)
+train <-  sample(1:nrow(d2), train.size)
+data.train <- d2[train, ]
+
+# Testing
+test_indices <- setdiff(1:nrow(d2), train)
+data.test <- d2[test_indices, ]
+```
+
+```{r}
+# Check for correlation
+cor(d2$G3,d2$G2)
+cor(d2$G3,d2$G1)
+# Really highly correlated, remove G2 and G1
+```
+
+```{r}
+# LASSO REGRESSION
+set.seed(123) # Set seed for reproducibility
+train.mat <-  model.matrix(G3 ~ . -G2 -G1 , data = data.train)
+test.mat <-  model.matrix(G3 ~ . -G2 -G1 , data = data.test)
+grid <-  10 ^ seq(4, -2, length = 100)
+mod.lasso <-  cv.glmnet(train.mat, data.train[, "G3"], 
+                        alpha = 1, lambda = grid, thresh = 1e-12)
+lambda.best <-  mod.lasso$lambda.min
+lambda.best # Our chosen lambda
+lasso.pred <-  predict(mod.lasso, newx = test.mat, s = lambda.best)
+MSE <- mean((data.train[, "G3"] - mean(lasso.pred))^2)
+```
+
+```{r}
+#The Lasso coefficients look like
+mod.lasso <-  glmnet(model.matrix(G3 ~ . -G2 -G1 -Fjob, data = d2), 
+                     d2[, "G3"], alpha = 1)
+predict(mod.lasso, s = lambda.best, type = "coefficients")
+```
+
+```{r}
+# Linear Model using least squares on the training set with all predictors (except G2 and G1).
+lm.fit1 <-  lm(G3 ~ . -G2 -G1, data = data.train)
+lm.pred <-  predict(lm.fit, data.test)
+mean((data.test[, "G3"] - lm.pred)^2)
+
+summary(lm.fit1)
+```
+
+```{r}
+# Linear Model using least squares on the training set with significant predictors.
+lm.fit2 <-  lm(G3 ~ school + studytime + failures + schoolsup + higher + Dalc + goout + health , data = data.train)
+lm.pred <-  predict(lm.fit, data.test)
+mean((data.test[, "G3"] - lm.pred)^2)
+
+summary(lm.fit2)
+```
+
+```{r}
+# VISUALISATION
+selected_variables <- c("school", "studytime", "failures", "schoolsup", "higher", "Dalc", "goout", "health", "G3")
+
+model.matrix(~0+., data= data.train[, selected_variables]) %>%
+  cor(use="pairwise.complete.obs") %>%
+  ggcorrplot(show.diag=FALSE, type="lower", lab=TRUE, lab_size=2)
+```
+
+```{r}
+#BOXPLOTS
+p1 <- ggplot(data = data.train, aes(x=school, y=G3)) + geom_boxplot() + theme_light(base_size = 12, base_family = "Palatino") +
+       theme(panel.grid = element_line(color = "lightblue"))
+p2 <- ggplot(data = data.train, aes(x=studytime, y=G3)) + geom_boxplot() + theme_light(base_size = 12, base_family = "Palatino") +
+       theme(panel.grid = element_line(color = "lightblue"))
+p3 <- ggplot(data = data.train, aes(x=failures, y=G3)) + geom_boxplot() + theme_light(base_size = 12, base_family = "Palatino") +
+       theme(panel.grid = element_line(color = "lightblue"))
+p4 <- ggplot(data = data.train, aes(x=schoolsup, y=G3)) + geom_boxplot()+ theme_light(base_size = 12, base_family = "Palatino") +
+       theme(panel.grid = element_line(color = "lightblue"))
+p5 <- ggplot(data = data.train, aes(x=higher, y=G3)) + geom_boxplot()+ theme_light(base_size = 12, base_family = "Palatino") +
+       theme(panel.grid = element_line(color = "lightblue"))
+p6 <- ggplot(data = data.train, aes(x=Dalc, y=G3)) + geom_boxplot()+ theme_light(base_size = 12, base_family = "Palatino") +
+       theme(panel.grid = element_line(color = "lightblue"))
+p7 <- ggplot(data = data.train, aes(x=goout, y=G3)) + geom_boxplot()+ theme_light(base_size = 12, base_family = "Palatino") +
+       theme(panel.grid = element_line(color = "lightblue"))
+p8 <- ggplot(data = data.train, aes(x=health, y=G3)) + geom_boxplot()+ theme_light(base_size = 12, base_family = "Palatino") +
+       theme(panel.grid = element_line(color = "lightblue"))
+
+grid.arrange(p1, p2, p3, p4, p5, p6, p7, p8, nrow=2)
+```
+
+```{r}
+# POOLED MODELS
+lm.fit.pooled <- lm(G3 ~ school + studytime + failures + schoolsup + higher + Dalc + goout + health + Fjob, data = data.train)
+
+summary(lm.fit.pooled)
+```
+
+```{r}
+# UNPOOLED MODELS
+#-------------------------------------
+# At home
+  
+subset_data <- subset(data.train, Fjob == "at_home")
+
+lm.fit.home <- lm(G3 ~ school + studytime + failures + schoolsup + higher + Dalc + goout + health, data = subset_data)
+
+#------------------------------------------------------
+# Health
+subset_data <- subset(data.train, Fjob == "health")
+
+lm.fit.health <- lm(G3 ~ school + studytime + failures + schoolsup + higher + Dalc + goout + health , data = subset_data)
+#------------------------------------------------------
+# Other
+subset_data <- subset(data.train, Fjob == "other")
+
+lm.fit.other <- lm(G3 ~ school + studytime + failures + schoolsup + higher + Dalc + goout + health , data = subset_data)
+#------------------------------------------------------
+# Services
+subset_data <- subset(data.train, Fjob == "services")
+  
+lm.fit.services <- lm(G3 ~ school + studytime + failures + schoolsup + higher + Dalc + goout + health , data = subset_data)
+#------------------------------------------------------
+# Teacher
+subset_data <- subset(data.train, Fjob == "teacher")
+
+lm.fit.teacher <- lm(G3 ~ school + studytime + failures + schoolsup + higher + Dalc + goout + health , data = d2)
+
+```
+
+```{r}
+# Extract coefficients from each lm object
+coefficients_list <- list(
+  lm.fit.home = coef(lm.fit.home),
+  lm.fit.health = coef(lm.fit.health),
+  lm.fit.other = coef(lm.fit.other),
+  lm.fit.services = coef(lm.fit.services),
+  lm.fit.teacher = coef(lm.fit.teacher)
+)
+
+# Extract standard errors from each lm object
+se_list <- list(
+  lm.fit.home = summary(lm.fit.home)$coefficients[, "Std. Error"],
+  lm.fit.health = summary(lm.fit.health)$coefficients[, "Std. Error"],
+  lm.fit.other = summary(lm.fit.other)$coefficients[, "Std. Error"],
+  lm.fit.services = summary(lm.fit.services)$coefficients[, "Std. Error"],
+  lm.fit.teacher = summary(lm.fit.teacher)$coefficients[, "Std. Error"]
+)
+
+
+# Combine coefficients into a data frame
+coefficients_df <- bind_rows(
+  .id = "Model",
+  coefficients_list
+)
+
+# Combine standard errors into a data frame
+se_df <- bind_rows(
+  .id = "Model",
+  se_list
+)
+
+# Calculate average coefficients by column
+avg_coefficients <- colMeans(coefficients_df[, -1], na.rm = TRUE)
+
+# Calculate average standard errors by column
+avg_se <- colMeans(se_df[, -1], na.rm = TRUE)
+
+# Create a data frame for averages
+avg_df <- data.frame(
+  Variable = names(avg_coefficients),
+  Average_Coefficient = avg_coefficients,
+  Average_Standard_Error = avg_se
+)
+
+print(avg_df)
+```
+
+HIERARCHIAL MODELS
+
+SINGLE LEVEL MODEL
+```{r}
+library(rstanarm)
+
+# Set priors!
+pred_priors <- normal(location = c(rep(0, times = 21)), scale = c(1,  
+                                                                  1, 1, 2,  
+                                                                  2, 1, 1,  
+                                                                  1, 
+                                                                  1,  
+                                                                  1, 2, 1, 1,
+                                                                  1, 2, 1, 2,
+                                                                  2, 2, 2, 2), autoscale=FALSE)
+
+
+# Fit the Bayesian model with specified priors for each predictor
+hl.1 <- stan_glm(
+  G3 ~ school + studytime + failures + schoolsup + higher + Dalc + goout + health,
+  data = data.train,
+  prior_intercept = normal(0, 2, autoscale=FALSE),
+  prior = pred_priors,
+  seed = 12345
+)
+
+
+summary(hl.1, digits = 3)
+```
+
+MULTILEVEL MODEL
+```{r}
+set.seed(123) # Set seed for reproducibility
+
+d2$Fjob <- as.factor(d2$Fjob)
+
+N <- length(d2$G3)
+
+# Generate hyperpriors for intercept
+hyperprior_mean_intercept <- rnorm(1, 10, 2)
+hyperprior_scale_intercept <- rcauchy(1, 0, 3)
+
+# Generate hyperpriors for predictors
+hyperprior_mean_predictor <- rnorm(1, 0, 0.5)
+hyperprior_scale_predictor <- rcauchy(1, 0, 1)
+
+# Fit the Bayesian model with hyperpriors
+hl.2 <- stan_glmer(
+  G3 ~ school + studytime + failures + schoolsup + higher + Dalc + goout + health + (1 | Fjob),
+  data = data.train,
+  prior_intercept = normal(hyperprior_mean_intercept, hyperprior_scale_intercept, autoscale = FALSE),
+  prior = normal(hyperprior_mean_predictor, hyperprior_scale_predictor, autoscale = FALSE),
+  prior_aux = cauchy(0, 100, autoscale = FALSE),
+  iter = 9000,
+  seed = 12345
+)
+
+summary(hl.2, digits = 3)
+
+# Diagnostics
+stan_rhat(hl.2, bins = 60)
+stan_ess(hl.2)
+stan_mcse(hl.2)
+```
+
+```{r}
+# ANALYSING THE PERFORMANCE
+
+# Predictions for all models
+predictions_model1 <- predict(lm.fit.pooled, data.test)
+predictions_model3 <- posterior_predict(hl.1, data.test)
+predictions_model4 <- posterior_predict(hl.2, data.test)
+predictions_model5 <- predict(lm.fit2, data.test)
+
+# For unpooled models
+data.test$school <- as.numeric(as.factor(data.test$school))
+data.test$studytime <- as.numeric(as.factor(data.test$studytime))
+data.test$failures <- as.numeric(as.factor(data.test$failures))
+data.test$schoolsup <- as.numeric(as.factor(data.test$schoolsup))
+data.test$higher <- as.numeric(as.factor(data.test$higher))
+data.test$Dalc <- as.numeric(as.factor(data.test$Dalc))
+data.test$goout <- as.numeric(as.factor(data.test$goout))
+data.test$health <- as.numeric(as.factor(data.test$health))
+
+
+# Manually predicting unpooled regression
+prediction_unpooled <- function(i){
+  
+  school_coeff <- 0
+  studytime_coeff <- 0
+  failures_coeff <- 0
+  schoolsup_coeff <- 0
+  higher_coeff <- 0
+  Dalc_coeff <- 0
+  goout_coeff <- 0
+  health_coeff <- 0
+  
+    if (test_data$school[i] != 1){
+      school_coeff <- 1.1930372
+    }
+
+    else if (test_data$studytime[i] != 1){
+      studytime_coeff <- avg_df[test_data$studytime[i] + 1, 2]
+    }    
+  
+    else if (test_data$failures[i] != 0){
+      failures_coeff <- avg_df[test_data$failures[i] + 5, 2]
+    }  
+  
+    else if (test_data$schoolsup[i] != 1){
+      schoolsup_coeff <- -0.4881232
+    }   
+  
+    else if (test_data$higher[i] != 1){
+      higher_coeff <- 3.6995856
+    }    
+  
+    else if (test_data$Dalc[i] == 2){
+      Dalc_coeff <- 0.7493615
+    }    
+    else if (test_data$Dalc[i] == 3){
+      Dalc_coeff <- 4.4653799
+    }    
+    else if (test_data$Dalc[i] == 4){
+      Dalc_coeff <- -1.7170923
+    }    
+    else if (test_data$Dalc[i] == 5){
+      Dalc_coeff <- -0.9131061
+    }      
+  
+    else if (test_data$goout[i] != 1){
+      goout_coeff <- avg_df[test_data$goout[i] + 11, 2]
+    }   
+  
+    else if (data.test$health[i] != 1){
+      health_coeff <- avg_df[data.test$health[i] + 15, 2]
+    }     
+  
+  prediction <- avg_df[1, 2] + data.test$school[i]* school_coeff +
+        data.test$studytime[i] * studytime_coeff + data.test$failures[i]*failures_coeff +
+        data.test$schoolsup[i] * schoolsup_coeff + data.test$higher[i]* higher_coeff +
+        data.test$Dalc[i]*Dalc_coeff + data.test$goout[i]*goout_coeff + data.test$health[i]*health_coeff
+                
+    return(prediction)
+}
+  
+unpooled_predictions <- sapply(1:nrow(test_data), function(i) prediction_unpooled(i))
+
+# Calculate MSE for each model
+mse_model1 <- mean((data.test$G3 - predictions_model1)^2)
+mse_model2 <- mean((data.test$G3 - unpooled_predictions)^2)
+mse_model3 <- mean((data.test$G3 - predictions_model3)^2)
+mse_model4 <- mean((data.test$G3 - predictions_model4)^2)
+mse_model5 <- mean((data.test$G3 - predictions_model5)^2)
+
+# Create a data frame for MSEs
+MSE_df <- data.frame(
+  Normal_Regression = mse_model5,
+  Pooled_Regression = mse_model1,
+  Unooled_Regression = mse_model2,
+  Hierarchical_1_Level = mse_model3,
+  Hierarchical_2_Levels = mse_model4
+)
+
+print(t(MSE_df))
+```
